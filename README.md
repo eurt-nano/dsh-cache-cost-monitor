@@ -31,6 +31,7 @@ DSH（DeepSeek Harness）v0.1.x 的 Cordis 插件：**自动监听每一轮 Agen
 dsh-cache-cost-monitor/
 ├── package.json          # 包清单：dsh.bundle.patch + dsh.client（规范要求的 bundle 声明）
 ├── cordis.patch.yml      # bundle 补丁：注入宿主插件行 + 配置（定价/阈值/币种）
+├── LICENSE               # MIT 许可
 ├── src/
 │   ├── index.ts          # 宿主插件：监听/统计/cache_report/投影/告警（ESM）
 │   └── client.ts         # 浏览器端：turnTail 页脚（经 tsdown 构建为 web2 client bundle）
@@ -98,6 +99,24 @@ dsh plugin --profile web remove dsh-cache-cost-monitor --config.node-linker=isol
 # 可选：清理 profile 依赖
 dsh plugin --profile web install --config.node-linker=isolated
 ```
+
+### 从 GitHub 直接安装（仓库即发布源）
+
+本插件以 GitHub 仓库作为发布源，无需本地拷贝，`dsh plugin add` 支持 git 地址：
+
+```powershell
+# 安装最新 main
+dsh plugin --profile web add https://github.com/eurt-nano/dsh-cache-cost-monitor.git#main --config.node-linker=isolated
+
+# 或安装固定版本（Release 标签，推荐生产使用）
+dsh plugin --profile web add https://github.com/eurt-nano/dsh-cache-cost-monitor.git#v0.2.0 --config.node-linker=isolated
+```
+
+> **git 安装说明**：包内 `prepare` 脚本会在安装时自动构建（`npm run build`）；
+> pnpm 默认拦截第三方包的构建脚本，若被拦截，把 `dsh-cache-cost-monitor`
+> 加入 profile 的 `pnpm-workspace.yaml` 的 `allowBuilds` 列表即可
+> （DSH 会打印具体需要的键名）。Windows 下同样请保留
+> `--config.node-linker=isolated`（见上文 Windows 说明）。
 
 ---
 
