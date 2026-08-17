@@ -1,5 +1,5 @@
-![Uploading image.png…]()
-![Uploading image.png…]()
+<img width="811" height="98" alt="image" src="https://github.com/user-attachments/assets/c7b64e23-58c9-402e-b32c-63d759242b30" />
+<img width="1047" height="185" alt="image" src="https://github.com/user-attachments/assets/393e61ec-10c7-4dae-a270-36c2dc888fb9" />
 
 
 # 🧮 dsh-cache-cost-monitor
