@@ -1,0 +1,61 @@
+# dsh-cache-cost-monitor bundle patch
+#
+# DSH v0.1.x 组合包（bundle）补丁清单：本文件由 profile 组合器在
+# `dsh.profile.bundles` 顺序中作为一层插入，把插件行注入组合树。
+# 行内 config 即插件配置，修改后重启 profile 生效。
+#
+# 单行双面：本包 package.json 同时声明了 `dsh.bundle.patch`（本文件）与
+# `dsh.client`（浏览器端）。因此这一行既是宿主插件行（DSH loader 动态
+# import 包主入口，运行统计/工具/告警逻辑），也会被 dsh-client-modules
+# 扫描进浏览器 boot 图（加载 exports["./client"] 的页脚组件）。
+#
+# 字段说明：
+# - threshold:            单轮缓存命中率告警阈值（0~1），低于该值输出 warn 日志
+# - cumulativeThreshold:  累计缓存命中率告警阈值（0~1）
+# - historySize:          命中率趋势窗口轮数（>= 2）
+# - warnOnMissingUsage:   API 响应缺少 usage 计数字段时是否输出 debug 日志
+# - timeBilling:          峰谷计价：auto（按官方时段自动判定，高峰 UTC 00:30–16:30，
+#                         非高峰为其半价）/ peak（强制高峰价）/ off-peak（强制非高峰价）
+# - currency:             费用显示币种：USD / CNY / both（默认 both）
+# - usdCnyRate:           美元→人民币汇率（默认 6.8，可覆盖）
+# - pricing:              按模型 ID 的定价表（USD / 每百万 tokens）：
+#                         基础字段为非高峰（默认）单价；带峰谷的模型可提供
+#                         peak 档（官方方案下通常为基础价 × 2）。
+#                         官方调价后在此覆盖即可；自定义/网关模型名也在此补充。
+
+- insert:
+    - id: cache-cost-monitor
+      name: 'dsh-cache-cost-monitor'
+      config:
+        threshold: 0.3
+        cumulativeThreshold: 0.3
+        historySize: 20
+        warnOnMissingUsage: true
+        timeBilling: auto
+        currency: both
+        usdCnyRate: 6.8
+        pricing:
+          deepseek-chat:
+            cacheHit: 0.028
+            cacheMiss: 0.28
+            output: 0.42
+          deepseek-reasoner:
+            cacheHit: 0.14
+            cacheMiss: 0.55
+            output: 2.19
+          deepseek-v4-flash:
+            cacheHit: 0.007
+            cacheMiss: 0.22
+            output: 0.66
+            peak:
+              cacheHit: 0.014
+              cacheMiss: 0.44
+              output: 1.32
+          deepseek-v4-pro:
+            cacheHit: 0.022
+            cacheMiss: 0.66
+            output: 1.98
+            peak:
+              cacheHit: 0.044
+              cacheMiss: 1.32
+              output: 3.96
