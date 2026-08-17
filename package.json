@@ -33,6 +33,14 @@
     "monitor"
   ],
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/eurt-nano/dsh-cache-cost-monitor.git"
+  },
+  "homepage": "https://github.com/eurt-nano/dsh-cache-cost-monitor#readme",
+  "bugs": {
+    "url": "https://github.com/eurt-nano/dsh-cache-cost-monitor/issues"
+  },
   "dependencies": {
     "@deepseek-ai/dsh-tools": "^0.1.0-rc.6",
     "zod": "^4.4.0"
