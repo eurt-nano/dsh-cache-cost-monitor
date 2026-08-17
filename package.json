@@ -1,6 +1,6 @@
 {
   "name": "dsh-cache-cost-monitor",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "DSH (DeepSeek Harness) v0.1.x Cordis 插件：自动监听每轮模型 API 调用的缓存命中/未命中/输出 tokens，实时统计缓存命中率与按官方定价（含峰谷时段）预估的 API 费用，注册 cache_report 工具，并在浏览器每条消息末尾低调显示本轮 tokens 与人民币消耗。",
   "type": "module",
   "main": "./lib/index.js",

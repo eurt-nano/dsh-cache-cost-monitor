@@ -180,7 +180,7 @@ dsh plugin --profile web add https://github.com/eurt-nano/dsh-cache-cost-monitor
 `cache_report` 的进程内累计统计随 DSH 重启归零；每条消息的页脚数据来自会话投影（随会话落库，重启后历史轮次仍可显示）。
 
 **Q：为什么我的消息末尾没有页脚？**
-页脚只统计插件安装**之后**、且 API 响应携带 usage 的轮次；产出了文件的轮次会让位给官方 "Produced" 行。
+页脚只显示插件安装**之后**、且 API 响应携带 usage 的轮次；产出了文件的轮次会让位给官方 "Produced" 行。tokens 直接读会话快照（引擎自带每轮 usage），人民币费用经 `cacheCost` 投影（v0.3.1 起宿主注入 `sessionProjections`，保证投影注册）；升级后请重启 DSH 并刷新页面。
 
 **Q：费用是精确的吗？**
 按「配置定价 × 实际 token 数」估算，不含折扣、重试与网关加价；未配置定价的模型按 0 计。官方调价后在 `config.pricing` 覆盖即可。

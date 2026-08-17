@@ -984,8 +984,10 @@ type Logger = ReturnType<Context['logger']>
 const plugin: Plugin.Object<CacheMonitorConfig> = {
   name: 'cache-cost-monitor',
   Config: CONFIG_SCHEMA,
-  // `tools` 是硬依赖：dsh-base 组合包必然提供，插件会等到其可用才激活
-  inject: ['tools'],
+  // 硬依赖：`tools`（dsh-base 必然提供）与 `sessionProjections`（dsh-base 的
+  // session-projection 行）。注入后者保证插件激活时投影注册表必然就绪，
+  // cacheCost 投影一定注册成功——否则页脚拿不到每轮费用数据。
+  inject: ['tools', 'sessionProjections'],
 
   apply(ctx: Context, config: CacheMonitorConfig): void {
     const logger = ctx.logger('cache-cost-monitor')
