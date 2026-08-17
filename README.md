@@ -1,3 +1,4 @@
+<img width="219" height="88" alt="image" src="https://github.com/user-attachments/assets/a800bf43-a031-4c44-abd2-231d1fba3451" />
 # 🧮 dsh-cache-cost-monitor
 
 > 让 DeepSeek 的每一分钱都花在刀刃上 —— **前缀缓存命中率、费用与健康度，一眼看穿。**
