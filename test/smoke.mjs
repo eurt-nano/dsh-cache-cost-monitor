@@ -108,6 +108,13 @@ assert(report.includes('deepseek-chat') && report.includes('deepseek-reasoner'),
 assert(report.includes('缓存优化建议') && (report.match(/^[123]\./gm)?.length ?? 0) >= 3, '报表包含 3 条优化建议')
 assert(report.includes('单轮命中率'), '趋势表存在')
 
+// —— 2b. 新特性：摘要行 / 健康度评级 / 火花线 ——
+assert(report.includes('📊 **摘要**'), '报表包含一行摘要')
+assert(report.includes('健康度 B 🟡'), `健康度评级正确（累计 53.3% → B 🟡；实际: ${report.match(/健康度 [SABCD] [🟢🟡🟠🔴]/)?.[0] ?? '未找到'}`)
+assert(/[▁▂▃▄▅▆▇█]/.test(report), '趋势区包含火花线字符')
+assert(report.includes('火花线'), '趋势区标注火花线')
+assert(!report.includes('费用预算'), '未配置预算时报表不出现预算行')
+
 // —— 3. 参数校验 ——
 const bad = await tool.execute({ limit: 'abc' })
 assert(bad.ok === false && bad.text.includes('参数校验失败'), '非法参数被拒绝')
@@ -245,6 +252,36 @@ assert(Object.keys(noUsage).length === 0, '无 usage 事件不产生状态')
 // 8d. 视图通过 Zod schema（wire 校验）
 const parsed = projectionDef.schema.safeParse(view)
 assert(parsed.success === true, '投影视图通过 Zod schema 校验')
+assert(view.usdCnyRate === 7.2, '投影视图携带展示汇率（usdCnyRate）')
+
+// —— 9. 费用预算：超支告警 + 报表标注 ——
+{
+  const instance = makeFakeCtx()
+  const budgetConfig = plugin.Config['~standard'].validate({
+    pricing: V4, timeBilling: 'off-peak', currency: 'USD',
+    budgetUsd: 0.01,   // 1M 未命中 flash = 0.22 USD，远超预算
+  }).value
+  assert(budgetConfig.budgetUsd === 0.01, 'budgetUsd 配置解析成功')
+  plugin.apply(instance.ctx, budgetConfig)
+  const listenerFn = instance.listeners['llm/stream']
+  const stream = listenerFn({ provider: 'deepseek', model: 'deepseek-v4-flash' }, () => chunksOf({ inputTokens: 1_000_000 }))
+  for await (const _ of stream) { /* 消费完 */ }
+  assert(instance.warnLogs.some(([msg]) => String(msg).includes('已超过费用预算')), '超预算触发 warn 告警')
+  const budgetReport = (await instance.tools[0].execute({})).text
+  assert(budgetReport.includes('已超预算'), '报表摘要标注已超预算')
+  assert(budgetReport.includes('费用预算：$0.0100') && budgetReport.includes('已超出'), '报表列出预算与超出状态')
+  // 预算告警只提示一次
+  const warnCount = instance.warnLogs.filter(([msg]) => String(msg).includes('已超过费用预算')).length
+  const stream2 = listenerFn({ provider: 'deepseek', model: 'deepseek-v4-flash' }, () => chunksOf({ inputTokens: 1_000_000 }))
+  for await (const _ of stream2) { /* 消费完 */ }
+  assert(instance.warnLogs.filter(([msg]) => String(msg).includes('已超过费用预算')).length === warnCount, '预算告警仅提示一次（防刷屏）')
+}
+
+// —— 10. 非法 budgetUsd 被配置校验拒绝 ——
+{
+  const bad = plugin.Config['~standard'].validate({ budgetUsd: '十块' })
+  assert(bad.issues !== undefined && bad.issues.length > 0, '非法 budgetUsd 被拒绝')
+}
 
 console.log(failures === 0 ? '\n全部通过 ✔' : `\n${failures} 项失败 ✘`)
 process.exit(failures === 0 ? 0 : 1)

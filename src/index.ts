@@ -69,6 +69,12 @@ export type TimeBillingMode = 'auto' | 'peak' | 'off-peak'
 /** 报表货币显示。 */
 export type CurrencyMode = 'USD' | 'CNY' | 'both'
 
+/** 缓存健康度评级（基于累计命中率）。 */
+export interface HealthGrade {
+  grade: 'S' | 'A' | 'B' | 'C' | 'D'
+  emoji: '🟢' | '🟡' | '🟠' | '🔴'
+}
+
 /** 插件配置（经 StandardSchemaV1 校验与归一化后传入 apply）。 */
 export interface CacheMonitorConfig {
   /** 单轮缓存命中率告警阈值（0~1），低于该值输出 warn 日志 */
@@ -87,6 +93,8 @@ export interface CacheMonitorConfig {
   usdCnyRate: number
   /** 按模型 ID 的定价表；未配置的模型按 0 计费并在报表中标注 */
   pricing: Record<string, PriceEntry>
+  /** 累计费用预算（USD，可选）：超出后输出 warn 告警并在报表中标注；缺省不设预算 */
+  budgetUsd?: number
 }
 
 /**
@@ -126,7 +134,6 @@ const DEFAULT_CONFIG: CacheMonitorConfig = {
   usdCnyRate: 6.8,
   pricing: OFFICIAL_PRICING,
 }
-
 // ============================================================================
 // 通用工具函数
 // ============================================================================
@@ -199,6 +206,16 @@ const CONFIG_SCHEMA: StandardSchemaV1<unknown, CacheMonitorConfig> = {
       if (historySize < 2) issues.push({ message: 'historySize 必须 >= 2', path: ['historySize'] })
       if (usdCnyRate <= 0) issues.push({ message: 'usdCnyRate 必须 > 0', path: ['usdCnyRate'] })
 
+      // 费用预算（可选）：缺省不设预算；提供时须为非负有限数字
+      let budgetUsd: number | undefined
+      if (raw.budgetUsd !== undefined) {
+        if (typeof raw.budgetUsd !== 'number' || !Number.isFinite(raw.budgetUsd) || raw.budgetUsd < 0) {
+          issues.push({ message: `budgetUsd 应为非负有限数字，收到 ${JSON.stringify(raw.budgetUsd)}`, path: ['budgetUsd'] })
+        } else {
+          budgetUsd = raw.budgetUsd
+        }
+      }
+
       // 定价表：合法条目保留；缺省时使用官方默认定价；整体非法时报错。
       const pricing: Record<string, PriceEntry> = {}
       if (raw.pricing === undefined) {
@@ -230,7 +247,7 @@ const CONFIG_SCHEMA: StandardSchemaV1<unknown, CacheMonitorConfig> = {
       }
 
       if (issues.length > 0) return { issues }
-      return { value: { threshold, cumulativeThreshold, historySize, warnOnMissingUsage, timeBilling, currency, usdCnyRate, pricing } }
+      return { value: { threshold, cumulativeThreshold, historySize, warnOnMissingUsage, timeBilling, currency, usdCnyRate, pricing, budgetUsd } }
     },
   },
 }
@@ -309,9 +326,11 @@ export interface TurnCostView {
   model: string
 }
 
-/** cacheCost 投影的完整视图：turn 号（字符串键）→ 单轮统计。 */
+/** cacheCost 投影的完整视图：turn 号（字符串键）→ 单轮统计 + 展示汇率。 */
 export interface CacheCostProjectionView {
   turns: Record<string, TurnCostView>
+  /** 人民币展示汇率（随配置 usdCnyRate，客户端据此换算） */
+  usdCnyRate?: number
 }
 
 declare module '@deepseek-ai/dsh-session-projection/types' {
@@ -337,6 +356,8 @@ function createCostProjection(config: CacheMonitorConfig): ProjectionDefinition<
       hitRate: z.number(),
       model: z.string(),
     })),
+    // 展示汇率：客户端常驻统计条据此换算人民币，与宿主配置保持一致
+    usdCnyRate: z.number().optional(),
   })
   return {
     key: 'cacheCost',
@@ -384,7 +405,7 @@ function createCostProjection(config: CacheMonitorConfig): ProjectionDefinition<
           model: s.model,
         }
       }
-      return { turns }
+      return { turns, usdCnyRate: config.usdCnyRate }
     },
   }
 }
@@ -450,6 +471,8 @@ class CacheStats {
   private readonly modelStats = new Map<string, ModelBucket>()
   /** 累计命中率告警是否已触发（避免日志刷屏，状态翻转时提示一次） */
   private cumulativeWarned = false
+  /** 费用预算告警是否已触发（超预算只提示一次） */
+  private budgetWarned = false
 
   constructor(private readonly config: CacheMonitorConfig) {}
 
@@ -518,12 +541,26 @@ class CacheStats {
     } else {
       this.cumulativeWarned = false
     }
+
+    // —— 费用预算告警（超预算提示一次） ——
+    if (this.config.budgetUsd !== undefined && this.totalCost > this.config.budgetUsd && !this.budgetWarned) {
+      this.budgetWarned = true
+      logger.warn(
+        '[cache-monitor] 已超过费用预算：预算 %s，当前累计 %s（调用 %d 次）。可在报表中查看明细',
+        formatUsd(this.config.budgetUsd), formatUsd(this.totalCost), this.totalCalls,
+      )
+    }
   }
 
   /** 累计命中率（无样本时为 0）。 */
   cumulativeRate(): number {
     const denominator = this.totalHit + this.totalMiss
     return denominator > 0 ? this.totalHit / denominator : 0
+  }
+
+  /** 是否已超过费用预算（未配置预算时恒为 false）。 */
+  overBudget(): boolean {
+    return this.config.budgetUsd !== undefined && this.totalCost > this.config.budgetUsd
   }
 
   /** 最近 N 条样本（倒序：最新在前）。 */
@@ -663,11 +700,49 @@ function formatPct(n: number): string {
   return `${(n * 100).toFixed(1)}%`
 }
 
+/** 火花线字符（8 级亮度，用于命中率趋势可视化）。 */
+const SPARK_CHARS = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'] as const
+
+/**
+ * 把一组 0~1 的命中率渲染成 ASCII 火花线（右端为最新样本）。
+ * 使用固定刻度 [0,1]，如实反映命中率高低而不放大微小波动。
+ */
+function sparklineOf(samples: UsageSample[]): string {
+  let out = ''
+  for (const sample of samples) {
+    const index = Math.min(SPARK_CHARS.length - 1, Math.max(0, Math.floor(sample.hitRate * SPARK_CHARS.length)))
+    out += SPARK_CHARS[index] ?? SPARK_CHARS[0]
+  }
+  return out
+}
+
+/**
+ * 缓存健康度评级：基于累计命中率给出等级与颜色。
+ * S ≥ 85% · A ≥ 70% · B ≥ 50% · C ≥ 30% · D < 30%。
+ */
+function healthGradeOf(rate: number): HealthGrade {
+  if (rate >= 0.85) return { grade: 'S', emoji: '🟢' }
+  if (rate >= 0.7) return { grade: 'A', emoji: '🟢' }
+  if (rate >= 0.5) return { grade: 'B', emoji: '🟡' }
+  if (rate >= 0.3) return { grade: 'C', emoji: '🟠' }
+  return { grade: 'D', emoji: '🔴' }
+}
+
 /** 生成完整统计报表文本。 */
 function buildReport(config: CacheMonitorConfig, stats: CacheStats, detail: boolean, limit: number): string {
   const lines: string[] = []
   lines.push('# 缓存命中率与成本报告（cache_report）')
   lines.push('')
+
+  // —— 一行摘要：命中率 · 费用 · 轮次 · 健康度（含预算状态），便于直接复制 ——
+  const health = stats.totalCalls > 0 ? healthGradeOf(stats.cumulativeRate()) : null
+  const budgetFlag = stats.overBudget() ? ' · ⚠️ 已超预算' : ''
+  lines.push(
+    `> 📊 **摘要**：命中率 ${formatPct(stats.cumulativeRate())} · 费用 ${formatCost(stats.totalCost, config)} · ${formatInt(stats.totalCalls)} 轮` +
+    (health !== null ? ` · 健康度 ${health.grade} ${health.emoji}` : '') + budgetFlag,
+  )
+  lines.push('')
+
   lines.push('## 累计统计')
   lines.push(`- 模型调用次数：${formatInt(stats.totalCalls)}`)
   lines.push(`- 累计缓存命中率：${formatPct(stats.cumulativeRate())}`)
@@ -676,6 +751,9 @@ function buildReport(config: CacheMonitorConfig, stats: CacheStats, detail: bool
   lines.push(`- 累计输出 tokens：${formatInt(stats.totalOutput)}`)
   const unpricedNote = stats.unpricedCalls > 0 ? `（其中 ${formatInt(stats.unpricedCalls)} 次调用无对应定价，按 0 计）` : ''
   lines.push(`- 预估 API 总费用：${formatCost(stats.totalCost, config)}${unpricedNote}`)
+  if (config.budgetUsd !== undefined) {
+    lines.push(`- 费用预算：${formatUsd(config.budgetUsd)}（${stats.overBudget() ? '⚠️ 已超出' : '未超出'}）`)
+  }
   if (config.currency === 'both' || config.currency === 'CNY') {
     lines.push(`- 汇率：1 USD = ${config.usdCnyRate} CNY（config.usdCnyRate 可覆盖）`)
   }
@@ -683,7 +761,8 @@ function buildReport(config: CacheMonitorConfig, stats: CacheStats, detail: bool
 
   const samples = stats.recent(limit)
   if (samples.length > 0) {
-    lines.push(`## 命中率趋势（最近 ${samples.length} 轮）`)
+    lines.push(`## 命中率趋势（最近 ${samples.length} 轮，右为最新）`)
+    lines.push(`> 火花线：${sparklineOf(samples)}`)
     lines.push('| 轮次 | 模型 | 命中 tokens | 未命中 tokens | 输出 tokens | 单轮命中率 | 单轮费用 |')
     lines.push('| --- | --- | --- | --- | --- | --- | --- |')
     samples.forEach((sample, index) => {
@@ -863,7 +942,7 @@ function createReportTool(config: CacheMonitorConfig, stats: CacheStats, logger:
   return {
     name: 'cache_report',
     description:
-      '输出缓存命中率与成本统计报表：累计/单轮缓存命中率、命中/未命中/输出 token 数、按官方定价（含峰谷时段）预估的 API 费用（美元与人民币）、命中率趋势、成本明细与 3 条缓存优化建议。',
+      '输出缓存命中率与成本统计报表：一行摘要（命中率/费用/轮次/健康度 S-D 评级 + 🟢🟡🟠🔴）、累计/单轮缓存命中率、命中/未命中/输出 token 数、按官方定价（含峰谷时段）预估的 API 费用（美元与人民币）、命中率趋势（含 ASCII 火花线）、成本明细与 3 条缓存优化建议；若配置了 budgetUsd 且已超预算会在报表中标注。',
     parameters: TOOL_PARAMETERS,
     output: {
       schema: TOOL_OUTPUT_SCHEMA,
@@ -910,10 +989,21 @@ const plugin: Plugin.Object<CacheMonitorConfig> = {
 
   apply(ctx: Context, config: CacheMonitorConfig): void {
     const logger = ctx.logger('cache-cost-monitor')
+    // —— 启动 banner（吸引眼球，一眼看清插件状态） ——
     logger.info(
-      'dsh-cache-cost-monitor 已启动：threshold=%s cumulativeThreshold=%s historySize=%d 峰谷计价=%s 币种=%s(汇率 %s) 定价模型=%d 个',
+      [
+        '╔══════════════════════════════════════════════════════════╗',
+        '║   dsh-cache-cost-monitor  v0.3.0                         ║',
+        '║   缓存命中率 · 费用预估 · 峰谷计价 · 健康度评级          ║',
+        '╚══════════════════════════════════════════════════════════╝',
+        '  cache_report 工具已就绪 · 消息末尾页脚 · 常驻统计条',
+      ].join('\n'),
+    )
+    logger.info(
+      '已启动：threshold=%s cumulativeThreshold=%s historySize=%d 峰谷计价=%s 币种=%s(汇率 %s) 定价模型=%d 个%s',
       formatPct(config.threshold), formatPct(config.cumulativeThreshold), config.historySize,
       config.timeBilling, config.currency, String(config.usdCnyRate), Object.keys(config.pricing).length,
+      config.budgetUsd !== undefined ? ` 预算=${formatUsd(config.budgetUsd)}` : ' 预算=未设置',
     )
 
     const stats = new CacheStats(config)

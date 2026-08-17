@@ -39,6 +39,8 @@ interface TurnCostView {
 
 interface CacheCostProjectionView {
   turns: Record<string, TurnCostView>
+  /** 人民币展示汇率（随宿主配置，缺省 6.8） */
+  usdCnyRate?: number
 }
 
 declare module '@deepseek-ai/dsh-session-projection/types' {
@@ -63,6 +65,15 @@ function formatTokens(n: number): string {
 function formatCny(n: number): string {
   if (!Number.isFinite(n) || n <= 0) return '¥0'
   return n < 1 ? `¥${n.toFixed(4)}` : `¥${n.toFixed(2)}`
+}
+
+/** 火花线字符（8 级亮度，用于命中率趋势可视化）。 */
+const SPARK_CHARS = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'] as const
+
+/** 把 0~1 的命中率映射为火花线字符（固定刻度，右端为最新）。 */
+function sparkOf(rate: number): string {
+  const index = Math.min(SPARK_CHARS.length - 1, Math.max(0, Math.floor(rate * SPARK_CHARS.length)))
+  return SPARK_CHARS[index] ?? SPARK_CHARS[0]
 }
 
 /**
@@ -160,6 +171,68 @@ function TurnCostFooter(props: TurnTailProps): React.ReactElement | null {
 }
 
 // ============================================================================
+// 常驻统计条（conversation.composer.dock，list 槽）
+// ============================================================================
+
+interface DockProps {
+  /** 宿主投影读面（标准 prop）：按 key 读取该会话的投影值。 */
+  useProjection: <K extends string>(key: K) => unknown
+  [key: string]: unknown
+}
+
+/**
+ * 输入框下方的常驻统计条：实时显示当前会话的累计消耗与命中率趋势，
+ * 形如 `⌀ 1.2M tokens · ¥2.01 · 命中 68% ▂▅▇█`。聚合 `cacheCost` 投影的
+ * 全部轮次，无数据（插件安装前/新会话）时渲染 null。
+ * 官方 StatsLine（order 0）在前，本条目 order 1 紧随其后。
+ */
+function SessionCostReadout(props: DockProps): React.ReactElement | null {
+  const value = props.useProjection('cacheCost') as CacheCostProjectionView | undefined
+  const turns = value?.turns
+  if (turns === undefined || Object.keys(turns).length === 0) return null
+
+  const entries = Object.entries(turns).sort((a, b) => Number(a[0]) - Number(b[0]))
+  let hit = 0
+  let miss = 0
+  let output = 0
+  let costUsd = 0
+  const recent: number[] = []
+  for (const [, t] of entries) {
+    hit += t.hit
+    miss += t.miss
+    output += t.output
+    costUsd += t.costUsd
+    recent.push(t.hitRate)
+  }
+  const denominator = hit + miss
+  const rate = denominator > 0 ? hit / denominator : 0
+  const spark = recent.slice(-14).map(sparkOf).join('')
+  const cnyRate = value?.usdCnyRate ?? 6.8
+
+  return React.createElement(
+    'div',
+    {
+      'data-cache-cost-dock': 'true',
+      title: `累计 ${hit + miss + output} tokens（命中 ${hit} · 未命中 ${miss} · 输出 ${output}）· $${costUsd.toFixed(4)} · 最近 ${recent.length} 轮命中率趋势`,
+      style: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: '6px',
+        fontSize: '11px',
+        lineHeight: '16px',
+        color: 'var(--dsw-alias-label-secondary)',
+        opacity: '0.7',
+        padding: '0 2px',
+        userSelect: 'none',
+      },
+    },
+    `⌀ ${formatTokens(hit + miss + output)} tokens · ${formatCny(costUsd * cnyRate)} · 命中 ${(rate * 100).toFixed(0)}%`,
+    ' ',
+    React.createElement('span', { style: { letterSpacing: '1px' } }, spark),
+  )
+}
+
+// ============================================================================
 // 客户端插件
 // ============================================================================
 
@@ -176,12 +249,20 @@ const plugin: Plugin.Object<never> = {
   apply(ctx: Context): void {
     const slots = ctx.get('slots') as SlotsLike | undefined
     if (slots === undefined) return
+    // 每段已结束的助手消息末尾：本轮 tokens · ¥费用
     slots.inject('conversation.chat.turnTail', () => slots.register({
       name: 'conversation.chat.turnTail',
       select: selectTurn,
       // 不设 priority（默认 0）：与官方 ui-deliverables 并列，靠注册顺序
       // 让位给产出文件行；无文件轮次由本页脚接管。
     }, TurnCostFooter))
+    // 输入框下方常驻统计条：累计 tokens · ¥费用 · 命中率 + 趋势火花线
+    // （list 槽；官方 StatsLine order 0 在前，本条目 order 1 紧随）
+    slots.inject('conversation.composer.dock', () => slots.register({
+      name: 'conversation.composer.dock',
+      id: 'cache-cost',
+      order: 1,
+    }, SessionCostReadout))
   },
 }
 

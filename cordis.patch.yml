@@ -18,6 +18,8 @@
 #                         非高峰为其半价）/ peak（强制高峰价）/ off-peak（强制非高峰价）
 # - currency:             费用显示币种：USD / CNY / both（默认 both）
 # - usdCnyRate:           美元→人民币汇率（默认 6.8，可覆盖）
+# - budgetUsd:            累计费用预算（USD，可选）：超出后 warn 告警并在报表标注；
+#                         缺省不设预算。例如 budgetUsd: 0.5
 # - pricing:              按模型 ID 的定价表（USD / 每百万 tokens）：
 #                         基础字段为非高峰（默认）单价；带峰谷的模型可提供
 #                         peak 档（官方方案下通常为基础价 × 2）。
